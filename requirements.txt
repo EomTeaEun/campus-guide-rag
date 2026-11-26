@@ -1,2 +1,1 @@
-# Lambda includes boto3. Local development only:
 boto3>=1.35,<2
