@@ -98,6 +98,8 @@ def handler(event,context):
         if method=='GET' and path=='/source':
             id=(event.get('queryStringParameters') or {}).get('id','')
             if not re.fullmatch(r'[a-z]+-\d{2}',id):return respond(400,{'error':'잘못된 문서 ID입니다.'})
+            manifest=json.loads(client('s3').get_object(Bucket=os.environ['DOCUMENT_BUCKET'],Key='documents/manifest.json')['Body'].read())
+            if id not in {d['id'] for d in manifest}:return respond(404,{'error':'문서를 찾을 수 없습니다.'})
             body=client('s3').get_object(Bucket=os.environ['DOCUMENT_BUCKET'],Key='documents/'+id+'.txt')['Body'].read().decode()
             return respond(200,body,'text/plain; charset=utf-8')
         if path!='/chat':return respond(404,{'error':'요청한 페이지를 찾을 수 없습니다.'})
