@@ -1,0 +1,288 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Campus Guide week2 - private fictional documents and basic HTTP API",
+  "Resources": {
+    "DocumentBucket": {
+      "Type": "AWS::S3::Bucket",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "PublicAccessBlockConfiguration": {
+          "BlockPublicAcls": true,
+          "BlockPublicPolicy": true,
+          "IgnorePublicAcls": true,
+          "RestrictPublicBuckets": true
+        },
+        "VersioningConfiguration": {
+          "Status": "Enabled"
+        },
+        "BucketEncryption": {
+          "ServerSideEncryptionConfiguration": [
+            {
+              "ServerSideEncryptionByDefault": {
+                "SSEAlgorithm": "AES256"
+              }
+            }
+          ]
+        },
+        "Tags": [
+          {
+            "Key": "Project",
+            "Value": "CampusGuide"
+          },
+          {
+            "Key": "Stage",
+            "Value": "Week2"
+          }
+        ]
+      }
+    },
+    "FunctionLogs": {
+      "Type": "AWS::Logs::LogGroup",
+      "Properties": {
+        "LogGroupName": "/aws/lambda/campus-guide-rag-api",
+        "RetentionInDays": 30
+      }
+    },
+    "ApiLogs": {
+      "Type": "AWS::Logs::LogGroup",
+      "Properties": {
+        "LogGroupName": "/aws/apigateway/campus-guide-rag",
+        "RetentionInDays": 30
+      }
+    },
+    "ExecutionRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "Policies": [
+          {
+            "PolicyName": "ReadFictionalDocumentsAndWriteOwnLogs",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:GetObject"
+                  ],
+                  "Resource": {
+                    "Fn::Sub": "${DocumentBucket.Arn}/documents/*"
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "logs:CreateLogStream",
+                    "logs:PutLogEvents"
+                  ],
+                  "Resource": {
+                    "Fn::GetAtt": [
+                      "FunctionLogs",
+                      "Arn"
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "ApiFunction": {
+      "Type": "AWS::Lambda::Function",
+      "DependsOn": "FunctionLogs",
+      "Properties": {
+        "FunctionName": "campus-guide-rag-api",
+        "Runtime": "python3.13",
+        "Handler": "index.handler",
+        "Role": {
+          "Fn::GetAtt": [
+            "ExecutionRole",
+            "Arn"
+          ]
+        },
+        "MemorySize": 128,
+        "Timeout": 10,
+        "Architectures": [
+          "arm64"
+        ],
+        "Environment": {
+          "Variables": {
+            "DOCUMENT_BUCKET": {
+              "Ref": "DocumentBucket"
+            }
+          }
+        },
+        "Code": {
+          "ZipFile": "\"\"\"Week 2 campus guide API. Uses fictional documents; no model calls yet.\"\"\"\nimport json\nimport os\nimport logging\nfrom datetime import datetime, timezone\n\nlogger = logging.getLogger(__name__)\nlogger.setLevel(logging.INFO)\n\n\ndef response(status, body):\n    return {\n        'statusCode': status,\n        'headers': {'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store'},\n        'body': json.dumps(body, ensure_ascii=False),\n    }\n\n\ndef read_manifest():\n    import boto3\n    obj = boto3.client('s3').get_object(Bucket=os.environ['DOCUMENT_BUCKET'], Key='documents/manifest.json')\n    return json.loads(obj['Body'].read())\n\n\ndef handler(event, context):\n    method = event.get('requestContext', {}).get('http', {}).get('method', 'GET')\n    path = event.get('rawPath', '/')\n    logger.info(json.dumps({'request_id': getattr(context, 'aws_request_id', 'local'), 'method': method, 'path': path}))\n    if method != 'GET':\n        return response(405, {'error': 'method_not_allowed'})\n    if path in ('/', '/health'):\n        return response(200, {\n            'service': 'campus-guide-rag', 'name': '캠퍼스 길잡이', 'status': 'ok',\n            'stage': 'week2-environment', 'region': os.environ.get('AWS_REGION', 'local'),\n            'fictional_university': '한빛대학교', 'rag_enabled': False,\n            'message': 'AWS 기본 API 실행 확인 완료. 가상 자료를 사용합니다.',\n            'checked_at': datetime.now(timezone.utc).isoformat(),\n        })\n    if path == '/documents':\n        try:\n            manifest = read_manifest()\n            return response(200, {'fictional': True, 'storage': 'Amazon S3', 'count': len(manifest), 'documents': manifest})\n        except Exception:\n            logger.exception('document_manifest_read_failed')\n            return response(503, {'error': 'document_storage_unavailable'})\n    return response(404, {'error': 'not_found'})\n"
+        },
+        "Tags": [
+          {
+            "Key": "Project",
+            "Value": "CampusGuide"
+          },
+          {
+            "Key": "Stage",
+            "Value": "Week2"
+          }
+        ]
+      }
+    },
+    "HttpApi": {
+      "Type": "AWS::ApiGatewayV2::Api",
+      "Properties": {
+        "Name": "campus-guide-rag-api",
+        "ProtocolType": "HTTP",
+        "Description": "Public basic API for fictional university documents; no personal data"
+      }
+    },
+    "Integration": {
+      "Type": "AWS::ApiGatewayV2::Integration",
+      "Properties": {
+        "ApiId": {
+          "Ref": "HttpApi"
+        },
+        "IntegrationType": "AWS_PROXY",
+        "IntegrationUri": {
+          "Fn::GetAtt": [
+            "ApiFunction",
+            "Arn"
+          ]
+        },
+        "PayloadFormatVersion": "2.0",
+        "TimeoutInMillis": 12000
+      }
+    },
+    "RootRoute": {
+      "Type": "AWS::ApiGatewayV2::Route",
+      "Properties": {
+        "ApiId": {
+          "Ref": "HttpApi"
+        },
+        "RouteKey": "GET /",
+        "Target": {
+          "Fn::Join": [
+            "/",
+            [
+              "integrations",
+              {
+                "Ref": "Integration"
+              }
+            ]
+          ]
+        }
+      }
+    },
+    "HealthRoute": {
+      "Type": "AWS::ApiGatewayV2::Route",
+      "Properties": {
+        "ApiId": {
+          "Ref": "HttpApi"
+        },
+        "RouteKey": "GET /health",
+        "Target": {
+          "Fn::Join": [
+            "/",
+            [
+              "integrations",
+              {
+                "Ref": "Integration"
+              }
+            ]
+          ]
+        }
+      }
+    },
+    "DocumentsRoute": {
+      "Type": "AWS::ApiGatewayV2::Route",
+      "Properties": {
+        "ApiId": {
+          "Ref": "HttpApi"
+        },
+        "RouteKey": "GET /documents",
+        "Target": {
+          "Fn::Join": [
+            "/",
+            [
+              "integrations",
+              {
+                "Ref": "Integration"
+              }
+            ]
+          ]
+        }
+      }
+    },
+    "Stage": {
+      "Type": "AWS::ApiGatewayV2::Stage",
+      "Properties": {
+        "ApiId": {
+          "Ref": "HttpApi"
+        },
+        "StageName": "$default",
+        "AutoDeploy": true,
+        "DefaultRouteSettings": {
+          "ThrottlingBurstLimit": 2,
+          "ThrottlingRateLimit": 1
+        },
+        "AccessLogSettings": {
+          "DestinationArn": {
+            "Fn::GetAtt": [
+              "ApiLogs",
+              "Arn"
+            ]
+          },
+          "Format": "{\"requestId\":\"$context.requestId\",\"status\":\"$context.status\",\"routeKey\":\"$context.routeKey\",\"responseLength\":\"$context.responseLength\"}"
+        }
+      }
+    },
+    "InvokePermission": {
+      "Type": "AWS::Lambda::Permission",
+      "Properties": {
+        "FunctionName": {
+          "Ref": "ApiFunction"
+        },
+        "Action": "lambda:InvokeFunction",
+        "Principal": "apigateway.amazonaws.com",
+        "SourceAccount": {
+          "Ref": "AWS::AccountId"
+        },
+        "SourceArn": {
+          "Fn::Sub": "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*/GET/*"
+        }
+      }
+    }
+  },
+  "Outputs": {
+    "ApiUrl": {
+      "Value": {
+        "Fn::GetAtt": [
+          "HttpApi",
+          "ApiEndpoint"
+        ]
+      }
+    },
+    "DocumentBucket": {
+      "Value": {
+        "Ref": "DocumentBucket"
+      }
+    },
+    "FunctionName": {
+      "Value": {
+        "Ref": "ApiFunction"
+      }
+    }
+  }
+}
